@@ -1,8 +1,9 @@
 /**
- * HomeYield Real Estate Investment Calculator
- * Version: 1.0.0
+ * HomeYield Real Estate Investment Calculator - Complete Version
+ * Version: 2.0.0
  * 
  * This script contains all functionality for the HomeYield calculator
+ * including integrated chart visualizations
  * Designed to be hosted on GitHub and loaded into Webflow
  */
 
@@ -26,6 +27,38 @@
             accent2: '#5f27cd',
             accent3: '#ff6b6b',
             accent4: '#10ac84'
+        }
+    };
+
+    // ========== CHART MANAGEMENT UTILITIES ==========
+    const ChartManager = {
+        charts: {},
+        
+        destroyChart: function(chartId) {
+            const canvas = document.getElementById(chartId);
+            if (canvas) {
+                const existingChart = Chart.getChart(canvas);
+                if (existingChart) {
+                    existingChart.destroy();
+                }
+            }
+        },
+        
+        register: function(name, chartInstance) {
+            this.charts[name] = chartInstance;
+        },
+        
+        get: function(name) {
+            return this.charts[name];
+        },
+        
+        destroyAll: function() {
+            Object.values(this.charts).forEach(chart => {
+                if (chart && typeof chart.destroy === 'function') {
+                    chart.destroy();
+                }
+            });
+            this.charts = {};
         }
     };
 
@@ -231,12 +264,12 @@
     }
 
     function initializeCollapsibles() {
-        document.querySelectorAll('.collapsible-header').forEach(header => {
+        document.querySelectorAll('.homeyield-collapsible-header').forEach(header => {
             header.addEventListener('click', function(e) {
                 e.preventDefault();
                 const checkbox = this.previousElementSibling;
                 const content = this.nextElementSibling;
-                const icon = this.querySelector('.collapsible-icon');
+                const icon = this.querySelector('.homeyield-collapsible-icon');
                 
                 checkbox.checked = !checkbox.checked;
                 
@@ -289,7 +322,7 @@
     }
 
     function initializeTooltips() {
-        document.querySelectorAll('.info-icon').forEach(icon => {
+        document.querySelectorAll('.homeyield-info-icon').forEach(icon => {
             let tooltip = null;
             
             icon.addEventListener('mouseenter', function(e) {
@@ -297,7 +330,7 @@
                 if (!text) return;
                 
                 tooltip = document.createElement('div');
-                tooltip.className = 'tooltip';
+                tooltip.className = 'homeyield-tooltip';
                 tooltip.textContent = text;
                 document.body.appendChild(tooltip);
                 
@@ -327,11 +360,15 @@
         const results = performCalculations();
         
         // Update all visualizations
-        updateCharts(results);
+        updateAllCharts(results);
         updateTables(results);
         
-        // Store results
-        window.HomeYield.financialOutputs = results;
+        // Store results globally
+        window.HomeYield.financialOutputs = results.cashFlows;
+        window.formDictionary = window.HomeYield.formDictionary;
+        window.financialOutputs = results.cashFlows;
+        window.sourcesAndUses = results.sourcesAndUses;
+        window.debtService = results.debtService;
     }
 
     function updateFormDictionary() {
@@ -646,8 +683,34 @@
             managementFee: Array(months).fill(0),
             operatingCF: Array(months).fill(0),
             leveredCF: Array(months).fill(0),
-            propertyValue: Array(months).fill(0)
+            propertyValue: Array(months).fill(0),
+            // Add arrays for debt service components
+            'IM Principal': Array(months).fill(0),
+            'IM Interest': Array(months).fill(0),
+            'IM Extra Payments': Array(months).fill(0),
+            'HEL Principal': Array(months).fill(0),
+            'HEL Interest': Array(months).fill(0),
+            'HEL Extra Payments': Array(months).fill(0),
+            'RM Principal': Array(months).fill(0),
+            'RM Interest': Array(months).fill(0),
+            'RM Extra Payments': Array(months).fill(0),
+            'IM Balance': debtService['Initial Mortgage'].EOP,
+            'HEL Balance': debtService['Home Equity Loan'].EOP,
+            'RM Balance': debtService['Refinanced Mortgage'].EOP
         };
+        
+        // Extract debt service components
+        for (let i = 0; i < months; i++) {
+            cashFlows['IM Principal'][i] = Math.abs(debtService['Initial Mortgage']['Scheduled Payments'][i]);
+            cashFlows['IM Interest'][i] = debtService['Initial Mortgage']['Interest Expense'][i];
+            cashFlows['IM Extra Payments'][i] = Math.abs(debtService['Initial Mortgage']['Extra Payments'][i]);
+            cashFlows['HEL Principal'][i] = Math.abs(debtService['Home Equity Loan']['Scheduled Payments'][i]);
+            cashFlows['HEL Interest'][i] = debtService['Home Equity Loan']['Interest Expense'][i];
+            cashFlows['HEL Extra Payments'][i] = Math.abs(debtService['Home Equity Loan']['Extra Payments'][i]);
+            cashFlows['RM Principal'][i] = Math.abs(debtService['Refinanced Mortgage']['Scheduled Payments'][i]);
+            cashFlows['RM Interest'][i] = debtService['Refinanced Mortgage']['Interest Expense'][i];
+            cashFlows['RM Extra Payments'][i] = Math.abs(debtService['Refinanced Mortgage']['Extra Payments'][i]);
+        }
         
         // Calculate property values and rent growth
         for (let i = 0; i < months; i++) {
@@ -704,6 +767,33 @@
             // Levered cash flow
             cashFlows.leveredCF[i] = cashFlows.operatingCF[i] + totalDebtService;
         }
+        
+        // Add proper names for chart compatibility
+        cashFlows['Revenue'] = cashFlows.revenues;
+        cashFlows['Raw Revenue'] = cashFlows.rawRevenues;
+        cashFlows['Insurance'] = cashFlows.insurance;
+        cashFlows['Property Tax'] = cashFlows.propertyTax;
+        cashFlows['HOA'] = cashFlows.hoa;
+        cashFlows['Maintenance'] = cashFlows.maintenance;
+        cashFlows['Management Fee'] = cashFlows.managementFee;
+        cashFlows['Levered FCF'] = cashFlows.leveredCF;
+        
+        // Calculate IRR
+        const lastMonth = months - 1;
+        const finalPropertyValue = cashFlows.propertyValue[lastMonth];
+        const finalDebtBalance = cashFlows['IM Balance'][lastMonth] + 
+                                cashFlows['HEL Balance'][lastMonth] + 
+                                cashFlows['RM Balance'][lastMonth];
+        const homeSaleProceeds = finalPropertyValue - finalDebtBalance;
+        
+        const xirrValues = [...cashFlows.leveredCF];
+        xirrValues[0] = -window.HomeYield.sourcesAndUses.equity;
+        xirrValues[lastMonth] += homeSaleProceeds;
+        
+        const xirrMonths = Array.from({length: months}, (_, i) => i);
+        const xirr = XIRR(xirrValues, xirrMonths) || 0;
+        
+        cashFlows['IRR'] = xirr;
         
         return cashFlows;
     }
@@ -801,418 +891,1121 @@
         return null; // Failed to converge
     }
 
-    // ========== CHARTS ==========
+    // ========== CHARTS INTEGRATION ==========
     
     function initializeCharts() {
-        const chartConfigs = [
-            {
-                id: 'sourcesUsesChart',
-                type: 'doughnut',
-                options: {
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.label + ': ' + formatCurrency(context.raw);
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                id: 'barChart',
-                type: 'bar',
-                options: {
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.dataset.label + ': ' + (context.raw * 100).toFixed(2) + '%';
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        y: {
-                            ticks: {
-                                callback: function(value) {
-                                    return (value * 100).toFixed(0) + '%';
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                id: 'annualCashFlowChart',
-                type: 'bar',
-                options: {
-                    scales: {
-                        x: { stacked: true },
-                        y: { 
-                            stacked: true,
-                            ticks: {
-                                callback: function(value) {
-                                    return formatCurrency(value);
-                                }
-                            }
-                        }
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.dataset.label + ': ' + formatCurrency(context.raw);
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                id: 'annualDebtPaymentChart',
-                type: 'bar',
-                options: {
-                    scales: {
-                        x: { stacked: true },
-                        y: { 
-                            stacked: true,
-                            ticks: {
-                                callback: function(value) {
-                                    return formatCurrency(value);
-                                }
-                            }
-                        }
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.dataset.label + ': ' + formatCurrency(context.raw);
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                id: 'debtBalanceChart',
-                type: 'line',
-                options: {
-                    scales: {
-                        y: {
-                            ticks: {
-                                callback: function(value) {
-                                    return formatCurrency(value);
-                                }
-                            }
-                        }
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.dataset.label + ': ' + formatCurrency(context.raw);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        ];
-
-        chartConfigs.forEach(config => {
-            const ctx = document.getElementById(config.id)?.getContext('2d');
-            if (ctx) {
-                window.HomeYield.charts[config.id] = new Chart(ctx, {
-                    type: config.type,
-                    data: { labels: [], datasets: [] },
-                    options: Object.assign({}, CONFIG.chartDefaults, config.options)
-                });
-            }
-        });
+        console.log('Initializing all charts...');
+        
+        // Destroy any existing charts
+        ChartManager.destroyAll();
+        
+        // Initialize each chart
+        try {
+            initializeSourcesUsesChart();
+            initializeBarChart();
+            initializeAnnualCashFlowChart();
+            initializeDebtPaymentChart();
+            initializeDebtBalanceChart();
+            
+            console.log('All charts initialized successfully');
+        } catch (error) {
+            console.error('Error initializing charts:', error);
+        }
     }
 
-    function updateCharts(results) {
-        updateSourcesUsesChart();
-        updateMarketComparisonChart(results.cashFlows.propertyValue);
-        updateAnnualCashFlowChart(results.cashFlows);
-        updateDebtPaymentChart(results.debtService);
-        updateDebtBalanceChart(results.debtService);
+    function updateAllCharts(results) {
+        // Update sources & uses
+        if (window.updateSourcesUsesChart) {
+            window.updateSourcesUsesChart(window.HomeYield.formDictionary);
+        }
+        
+        // Update market comparison
+        if (window.updateBarChart) {
+            window.updateBarChart();
+        }
+        
+        // Update annual cash flow
+        if (window.updateAnnualCashFlowChart) {
+            window.updateAnnualCashFlowChart(results.cashFlows);
+        }
+        
+        // Update debt payment
+        if (window.updateDebtPaymentChart) {
+            window.updateDebtPaymentChart();
+        }
+        
+        // Update debt balance
+        if (window.updateDebtBalanceChart) {
+            window.updateDebtBalanceChart(results.cashFlows);
+        }
     }
 
-    function updateSourcesUsesChart() {
-        const chart = window.HomeYield.charts.sourcesUsesChart;
-        if (!chart) return;
+    // ========== SOURCES & USES CHART ==========
+    
+    function initializeSourcesUsesChart() {
+        console.log("Initializing Sources & Uses chart");
         
-        const data = window.HomeYield.sourcesAndUses;
+        const canvas = document.getElementById('sourcesUsesChart');
+        if (!canvas) {
+            console.error("Cannot find #sourcesUsesChart canvas element");
+            return;
+        }
         
-        chart.data = {
-            labels: ['Equity', 'Initial Mortgage', 'Home Equity Loan'],
-            datasets: [{
-                data: [data.equity, data.initialMortgage, data.hel],
-                backgroundColor: [CONFIG.colors.primary, CONFIG.colors.secondary, CONFIG.colors.accent1]
-            }]
+        ChartManager.destroyChart('sourcesUsesChart');
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Chart data configuration
+        const chartData = {
+            labels: ['Sources', 'Uses'],
+            datasets: [
+                { 
+                    label: 'Equity', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(122, 223, 187, 0.6)', 
+                    borderColor: 'rgba(122, 223, 187, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(122, 223, 187, 0.8)'
+                },
+                { 
+                    label: 'HEL', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(54, 162, 235, 0.6)', 
+                    borderColor: 'rgba(54, 162, 235, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(54, 162, 235, 0.8)'
+                },
+                { 
+                    label: 'Initial Mortgage', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(255, 206, 86, 0.6)', 
+                    borderColor: 'rgba(255, 206, 86, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(255, 206, 86, 0.8)'
+                },
+                { 
+                    label: 'Purchase Price', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(153, 102, 255, 0.6)', 
+                    borderColor: 'rgba(153, 102, 255, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(153, 102, 255, 0.8)'
+                },
+                { 
+                    label: 'Closing Costs', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(252, 139, 86, 0.6)', 
+                    borderColor: 'rgba(252, 139, 86, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(252, 139, 86, 0.8)'
+                },
+                { 
+                    label: 'Loan Fees', 
+                    barPercentage: 0.9, 
+                    backgroundColor: 'rgba(255, 99, 132, 0.6)', 
+                    borderColor: 'rgba(255, 99, 132, 1)', 
+                    data: [0, 0],
+                    hoverBackgroundColor: 'rgba(255, 99, 132, 0.8)'
+                }
+            ]
         };
         
-        chart.update();
+        // Enhanced total labels plugin
+        const totalLabelsPlugin = {
+            id: 'totalLabels',
+            afterDraw: (chart) => {
+                const ctx = chart.ctx;
+                const sourcesTotal = chart.totalSources || 0;
+                const usesTotal = chart.totalUses || 0;
+                
+                if (sourcesTotal === 0 && usesTotal === 0) return;
+                
+                ctx.save();
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillStyle = '#000';
+                
+                const meta0 = chart.getDatasetMeta(0);
+                const meta3 = chart.getDatasetMeta(3);
+                
+                if (meta0.data.length > 0 && meta3.data.length > 0) {
+                    const sourcesX = meta0.data[0].x;
+                    const usesX = meta3.data[1].x;
+                    
+                    // Find stack tops more efficiently
+                    let sourcesYTop = chart.chartArea.bottom;
+                    let usesYTop = chart.chartArea.bottom;
+                    
+                    for (let i = 0; i < 3; i++) {
+                        const meta = chart.getDatasetMeta(i);
+                        if (meta.data[0] && chart.data.datasets[i].data[0] > 0) {
+                            sourcesYTop = Math.min(sourcesYTop, meta.data[0].y);
+                        }
+                    }
+                    
+                    for (let i = 3; i < 6; i++) {
+                        const meta = chart.getDatasetMeta(i);
+                        if (meta.data[1] && chart.data.datasets[i].data[1] > 0) {
+                            usesYTop = Math.min(usesYTop, meta.data[1].y);
+                        }
+                    }
+                    
+                    // Draw totals with shadow for better visibility
+                    ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+                    ctx.shadowBlur = 3;
+                    
+                    if (sourcesTotal > 0) {
+                        ctx.fillText(formatCurrency(sourcesTotal, true), sourcesX, sourcesYTop - 10);
+                    }
+                    
+                    if (usesTotal > 0) {
+                        ctx.fillText(formatCurrency(usesTotal, true), usesX, usesYTop - 10);
+                    }
+                }
+                ctx.restore();
+            }
+        };
         
-        // Update table
-        updateSourcesUsesTable(data);
+        // Chart options
+        const options = {
+            ...CONFIG.chartDefaults,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + 
+                                   formatCurrency(context.raw);
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    stacked: true,
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return formatCurrency(value, true);
+                        },
+                        maxTicksLimit: 10
+                    },
+                    grid: {
+                        drawBorder: false,
+                        color: 'rgba(0, 0, 0, 0.1)'
+                    }
+                },
+                x: {
+                    stacked: true,
+                    ticks: { 
+                        font: { weight: 'bold' },
+                        padding: 10
+                    },
+                    grid: {
+                        display: false
+                    }
+                }
+            },
+            hover: {
+                animationDuration: 200
+            }
+        };
+        
+        // Create chart
+        const sourcesUsesChart = new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: options,
+            plugins: [totalLabelsPlugin]
+        });
+        
+        // Initialize properties
+        sourcesUsesChart.totalSources = 0;
+        sourcesUsesChart.totalUses = 0;
+        
+        // Register chart
+        ChartManager.register('sourcesUses', sourcesUsesChart);
+        window.sourcesUsesChart = sourcesUsesChart;
+        
+        // Update function
+        window.updateSourcesUsesChart = function(updatedDictionary) {
+            if (!updatedDictionary) return;
+            
+            try {
+                const sourcesAndUses = calculateSourcesAndUses(updatedDictionary);
+                
+                // Batch updates
+                const updates = [
+                    [0, 0, sourcesAndUses.equity],
+                    [1, 0, sourcesAndUses.hel],
+                    [2, 0, sourcesAndUses.initialMortgage],
+                    [3, 1, sourcesAndUses.purchasePrice],
+                    [4, 1, sourcesAndUses.closingCosts],
+                    [5, 1, sourcesAndUses.closingLoanCosts]
+                ];
+                
+                updates.forEach(([datasetIdx, dataIdx, value]) => {
+                    sourcesUsesChart.data.datasets[datasetIdx].data[dataIdx] = value;
+                });
+                
+                sourcesUsesChart.totalSources = sourcesAndUses.totalSources;
+                sourcesUsesChart.totalUses = sourcesAndUses.totalUses;
+                
+                sourcesUsesChart.update('none'); // Skip animation for performance
+                
+                // Update table
+                createSourcesUsesTable(document.getElementById('toggle-switch')?.checked || false);
+            } catch (error) {
+                console.error('Error updating sources uses chart:', error);
+            }
+        };
+        
+        // Create initial table
+        createSourcesUsesTable(false);
     }
 
-    function updateSourcesUsesTable(data) {
+    function createSourcesUsesTable(isAdvancedForm) {
         const tableContainer = document.getElementById('table-container');
         if (!tableContainer) return;
         
-        const sources = [
-            { label: 'Equity', value: data.equity, color: CONFIG.colors.primary },
-            { label: 'Initial Mortgage', value: data.initialMortgage, color: CONFIG.colors.secondary },
-            { label: 'Home Equity Loan', value: data.hel, color: CONFIG.colors.accent1 }
-        ];
+        const sourcesAndUses = window.HomeYield.sourcesAndUses || calculateSourcesAndUses(window.HomeYield.formDictionary);
         
-        const uses = [
-            { label: 'Purchase Price', value: data.purchasePrice },
-            { label: 'Closing Costs', value: data.closingCosts },
-            { label: 'Financing Costs', value: data.closingLoanCosts }
-        ];
-        
-        let html = '<table class="summary-table"><tbody>';
+        let html = '<table class="homeyield-summary-table">';
         
         // Sources
-        html += '<tr><td colspan="2" style="font-weight: bold; background: #f5f5f5;">SOURCES</td></tr>';
-        sources.forEach(item => {
-            if (item.value > 0) {
-                html += `<tr>
-                    <td><span class="oval" style="background-color: ${item.color};">${item.label}</span></td>
-                    <td class="currency-cell">${formatCurrency(item.value)}</td>
-                </tr>`;
-            }
-        });
-        html += `<tr style="font-weight: bold;">
-            <td>Total Sources</td>
-            <td class="currency-cell">${formatCurrency(data.totalSources)}</td>
-        </tr>`;
+        html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(122, 223, 187, 0.6);">Equity</div></td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.equity) + '</td></tr>';
         
-        // Separator
-        html += '<tr><td colspan="2" style="height: 20px;"></td></tr>';
+        if (isAdvancedForm && sourcesAndUses.hel > 0) {
+            html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(54, 162, 235, 0.6);">HEL</div></td>';
+            html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.hel) + '</td></tr>';
+        }
+        
+        html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(255, 206, 86, 0.6);">Initial Mortgage</div></td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.initialMortgage) + '</td></tr>';
+        
+        html += '<tr style="font-weight: bold; border-top: 2px solid #333;"><td>Total Sources</td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.totalSources) + '</td></tr>';
+        
+        // Spacer
+        html += '<tr><td colspan="2" style="height: 10px;"></td></tr>';
         
         // Uses
-        html += '<tr><td colspan="2" style="font-weight: bold; background: #f5f5f5;">USES</td></tr>';
-        uses.forEach(item => {
-            if (item.value > 0) {
-                html += `<tr>
-                    <td>${item.label}</td>
-                    <td class="currency-cell">${formatCurrency(item.value)}</td>
-                </tr>`;
-            }
-        });
-        html += `<tr style="font-weight: bold;">
-            <td>Total Uses</td>
-            <td class="currency-cell">${formatCurrency(data.totalUses)}</td>
-        </tr>`;
+        html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(153, 102, 255, 0.6);">Purchase Price</div></td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.purchasePrice) + '</td></tr>';
         
-        html += '</tbody></table>';
+        html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(252, 139, 86, 0.6);">Closing Costs</div></td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.closingCosts) + '</td></tr>';
+        
+        if (isAdvancedForm && sourcesAndUses.closingLoanCosts > 0) {
+            html += '<tr><td><div class="homeyield-oval" style="background-color: rgba(255, 99, 132, 0.6);">Loan Fees</div></td>';
+            html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.closingLoanCosts) + '</td></tr>';
+        }
+        
+        html += '<tr style="font-weight: bold; border-top: 2px solid #333;"><td>Total Uses</td>';
+        html += '<td class="currency-cell">' + formatCurrency(sourcesAndUses.totalUses) + '</td></tr>';
+        
+        html += '</table>';
+        
         tableContainer.innerHTML = html;
     }
 
-    function updateMarketComparisonChart(propertyValues) {
-        const chart = window.HomeYield.charts.barChart;
-        if (!chart || !window.HomeYield.financialOutputs.metrics) return;
+    // ========== MARKET COMPARISON CHART ==========
+    
+    function initializeBarChart() {
+        console.log("Initializing market comparison chart");
         
-        const metrics = window.HomeYield.financialOutputs.metrics;
-        const marketReturn = 0.08; // 8% market return assumption
+        const canvas = document.getElementById('barChart');
+        if (!canvas) {
+            console.error("Bar chart canvas not found");
+            return;
+        }
         
-        chart.data = {
-            labels: ['Your Investment', 'S&P 500'],
-            datasets: [{
-                data: [metrics.xirr, marketReturn],
-                backgroundColor: [CONFIG.colors.primary, '#e0e0e0']
+        ChartManager.destroyChart('barChart');
+        
+        const benchmarks = {
+            SPY: 0.115,
+            VNQ: 0.068,
+            VCIT: 0.039
+        };
+        
+        const chart = new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels: ['S&P 500', 'RE ETF', 'Bond ETF', 'Your Property'],
+                datasets: [{
+                    label: 'Annual Returns',
+                    backgroundColor: [
+                        'rgba(255, 209, 81, 0.7)',
+                        'rgba(75, 192, 192, 0.7)',
+                        'rgba(164, 164, 164, 0.7)',
+                        'rgba(122, 223, 187, 0.7)'
+                    ],
+                    hoverBackgroundColor: [
+                        'rgba(255, 209, 81, 0.9)',
+                        'rgba(75, 192, 192, 0.9)',
+                        'rgba(164, 164, 164, 0.9)',
+                        'rgba(122, 223, 187, 0.9)'
+                    ],
+                    data: [benchmarks.SPY, benchmarks.VNQ, benchmarks.VCIT, 0],
+                    borderWidth: 2,
+                    borderColor: 'rgba(0, 0, 0, 0.1)'
+                }]
+            },
+            options: {
+                ...CONFIG.chartDefaults,
+                layout: {
+                    padding: {
+                        top: 30,
+                        bottom: 20
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return (context.raw * 100).toFixed(1) + '%';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return (value * 100).toFixed(0) + '%';
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        }
+                    }
+                }
+            },
+            plugins: [{
+                afterDatasetsDraw: function(chart) {
+                    const ctx = chart.ctx;
+                    ctx.save();
+                    ctx.font = 'bold 12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillStyle = '#333';
+                    
+                    chart.data.datasets.forEach((dataset, i) => {
+                        const meta = chart.getDatasetMeta(i);
+                        meta.data.forEach((bar, index) => {
+                            const value = dataset.data[index];
+                            const text = (value * 100).toFixed(1) + '%';
+                            ctx.fillText(text, bar.x, bar.y - 5);
+                        });
+                    });
+                    ctx.restore();
+                }
             }]
-        };
+        });
         
-        chart.update();
+        ChartManager.register('marketComparison', chart);
+        window.myChart = chart;
+        
+        // Update function
+        window.updateBarChart = function() {
+            if (chart && window.HomeYield.financialOutputs) {
+                const newIRR = window.HomeYield.financialOutputs.IRR || 0;
+                chart.data.datasets[0].data[3] = newIRR;
+                
+                // Update y-axis max
+                const maxValue = Math.max(newIRR, ...Object.values(benchmarks));
+                chart.options.scales.y.max = Math.ceil(maxValue * 20) / 20 + 0.03;
+                
+                chart.update();
+            }
+        };
     }
 
-    function updateAnnualCashFlowChart(cashFlows) {
-        const chart = window.HomeYield.charts.annualCashFlowChart;
-        if (!chart) return;
+    // ========== ANNUAL CASH FLOW CHART ==========
+    
+    function initializeAnnualCashFlowChart() {
+        console.log("Initializing annual cash flow chart");
         
-        const years = Math.ceil(cashFlows.revenues.length / 12);
-        const annualData = aggregateToAnnual(cashFlows, years);
+        const canvas = document.getElementById('annualCashFlowChart');
+        if (!canvas) {
+            console.error("Cannot find #annualCashFlowChart canvas element");
+            return;
+        }
         
-        chart.data = {
-            labels: Array.from({length: years}, (_, i) => `Year ${i + 1}`),
-            datasets: [
-                {
-                    label: 'Rental Income',
-                    data: annualData.revenues,
-                    backgroundColor: CONFIG.colors.primary
+        ChartManager.destroyChart('annualCashFlowChart');
+        
+        const chartConfig = {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    // Expense categories (negative values)
+                    {
+                        label: 'Insurance',
+                        backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 8,
+                        data: []
+                    },
+                    {
+                        label: 'Property Tax',
+                        backgroundColor: 'rgba(255, 159, 64, 0.7)',
+                        borderColor: 'rgba(255, 159, 64, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 7,
+                        data: []
+                    },
+                    {
+                        label: 'HOA',
+                        backgroundColor: 'rgba(153, 102, 255, 0.7)',
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 6,
+                        data: []
+                    },
+                    {
+                        label: 'Maintenance',
+                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 5,
+                        data: []
+                    },
+                    {
+                        label: 'Management Fee',
+                        backgroundColor: 'rgba(255, 206, 86, 0.7)',
+                        borderColor: 'rgba(255, 206, 86, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 4,
+                        data: []
+                    },
+                    {
+                        label: 'Interest Expense',
+                        backgroundColor: 'rgba(199, 199, 199, 0.7)',
+                        borderColor: 'rgba(199, 199, 199, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 3,
+                        data: []
+                    },
+                    {
+                        label: 'Principal Payments',
+                        backgroundColor: 'rgba(120, 120, 120, 0.7)',
+                        borderColor: 'rgba(120, 120, 120, 1)',
+                        borderWidth: 1,
+                        stack: 'expenses',
+                        order: 2,
+                        data: []
+                    },
+                    // Revenue (positive values)
+                    {
+                        label: 'Revenue',
+                        backgroundColor: 'rgba(122, 223, 187, 0.7)',
+                        borderColor: 'rgba(122, 223, 187, 1)',
+                        borderWidth: 1,
+                        stack: 'revenue',
+                        order: 1,
+                        data: []
+                    },
+                    // Net cash flow line
+                    {
+                        label: 'Net Cash Flow',
+                        type: 'line',
+                        backgroundColor: 'transparent',
+                        borderColor: 'rgba(0, 0, 0, 1)',
+                        borderWidth: 3,
+                        pointBackgroundColor: 'white',
+                        pointBorderColor: 'black',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        tension: 0.1,
+                        order: 0,
+                        data: []
+                    }
+                ]
+            },
+            options: {
+                ...CONFIG.chartDefaults,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 12,
+                            usePointStyle: true,
+                            padding: 10,
+                            font: {
+                                size: 11
+                            }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                return 'Year ' + tooltipItems[0].label;
+                            },
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = context.raw;
+                                const formatted = formatCurrency(Math.abs(value));
+                                
+                                if (value < 0 && context.dataset.type !== 'line') {
+                                    return `${label}: ${formatted} (expense)`;
+                                }
+                                return `${label}: ${formatted}`;
+                            }
+                        }
+                    }
                 },
-                {
-                    label: 'Insurance',
-                    data: annualData.insurance,
-                    backgroundColor: CONFIG.colors.accent3
-                },
-                {
-                    label: 'Property Tax',
-                    data: annualData.propertyTax,
-                    backgroundColor: CONFIG.colors.accent2
-                },
-                {
-                    label: 'HOA',
-                    data: annualData.hoa,
-                    backgroundColor: CONFIG.colors.secondary
-                },
-                {
-                    label: 'Maintenance',
-                    data: annualData.maintenance,
-                    backgroundColor: CONFIG.colors.accent1
-                },
-                {
-                    label: 'Management Fee',
-                    data: annualData.managementFee,
-                    backgroundColor: CONFIG.colors.accent4
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Year',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        grid: { display: false }
+                    },
+                    y: {
+                        stacked: true,
+                        title: {
+                            display: true,
+                            text: 'Annual Amount ($)',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        ticks: {
+                            callback: function(value) {
+                                return formatCurrency(value, true);
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        }
+                    }
                 }
-            ]
+            }
         };
         
-        chart.update();
+        const annualCashFlowChart = new Chart(canvas, chartConfig);
+        
+        ChartManager.register('annualCashFlow', annualCashFlowChart);
+        window.annualCashFlowChart = annualCashFlowChart;
+        
+        // Update function
+        window.updateAnnualCashFlowChart = function(outputs) {
+            if (!outputs) return;
+            
+            try {
+                const investmentYears = window.HomeYield.formDictionary['investment-years'] || 20;
+                
+                // Prepare monthly data
+                const monthlyData = {
+                    revenue: outputs['Raw Revenue'] || outputs['Revenue'] || [],
+                    insurance: outputs['Insurance'] || [],
+                    propertyTax: outputs['Property Tax'] || [],
+                    hoa: outputs['HOA'] || [],
+                    maintenance: outputs['Maintenance'] || [],
+                    managementFee: outputs['Management Fee'] || [],
+                    interest: (outputs['IM Interest'] || []).map((val, idx) => 
+                        val + (outputs['HEL Interest']?.[idx] || 0) + (outputs['RM Interest']?.[idx] || 0)
+                    ),
+                    principal: (outputs['IM Principal'] || []).map((val, idx) => 
+                        val + (outputs['HEL Principal']?.[idx] || 0) + (outputs['RM Principal']?.[idx] || 0)
+                    ),
+                    netCashFlow: outputs['Levered FCF'] || []
+                };
+                
+                // Aggregate to yearly data
+                const yearlyData = aggregateMonthlyToYearly(monthlyData, investmentYears);
+                
+                // Update chart data
+                annualCashFlowChart.data.labels = yearlyData.labels;
+                
+                const dataMapping = [
+                    { idx: 0, key: 'insurance', negate: true },
+                    { idx: 1, key: 'propertyTax', negate: true },
+                    { idx: 2, key: 'hoa', negate: true },
+                    { idx: 3, key: 'maintenance', negate: true },
+                    { idx: 4, key: 'managementFee', negate: true },
+                    { idx: 5, key: 'interest', negate: true },
+                    { idx: 6, key: 'principal', negate: true },
+                    { idx: 7, key: 'revenue', negate: false },
+                    { idx: 8, key: 'netCashFlow', negate: false }
+                ];
+                
+                dataMapping.forEach(({ idx, key, negate }) => {
+                    const data = yearlyData.data[key];
+                    if (data) {
+                        annualCashFlowChart.data.datasets[idx].data = 
+                            negate ? data.map(v => -Math.abs(v)) : data;
+                    }
+                });
+                
+                annualCashFlowChart.update();
+            } catch (error) {
+                console.error('Error updating annual cash flow chart:', error);
+            }
+        };
     }
 
-    function updateDebtPaymentChart(debtService) {
-        const chart = window.HomeYield.charts.annualDebtPaymentChart;
-        if (!chart) return;
+    function aggregateMonthlyToYearly(monthlyData, years) {
+        const result = {
+            labels: [],
+            data: {}
+        };
         
-        const years = Math.ceil(debtService['Initial Mortgage'].BOP.length / 12);
-        const annualData = aggregateDebtToAnnual(debtService, years);
+        // Generate labels
+        for (let i = 0; i < years; i++) {
+            result.labels.push(`${i + 1}`);
+        }
         
-        chart.data = {
-            labels: Array.from({length: years}, (_, i) => `Year ${i + 1}`),
-            datasets: [
-                {
-                    label: 'IM Principal',
-                    data: annualData.imPrincipal,
-                    backgroundColor: CONFIG.colors.primary
-                },
-                {
-                    label: 'IM Interest',
-                    data: annualData.imInterest,
-                    backgroundColor: CONFIG.colors.secondary
-                },
-                {
-                    label: 'HEL Principal',
-                    data: annualData.helPrincipal,
-                    backgroundColor: CONFIG.colors.accent1
-                },
-                {
-                    label: 'HEL Interest',
-                    data: annualData.helInterest,
-                    backgroundColor: CONFIG.colors.accent2
-                },
-                {
-                    label: 'RM Principal',
-                    data: annualData.rmPrincipal,
-                    backgroundColor: CONFIG.colors.accent3
-                },
-                {
-                    label: 'RM Interest',
-                    data: annualData.rmInterest,
-                    backgroundColor: CONFIG.colors.accent4
+        // Process each data series
+        Object.keys(monthlyData).forEach(key => {
+            if (!Array.isArray(monthlyData[key])) return;
+            
+            result.data[key] = [];
+            for (let year = 0; year < years; year++) {
+                const startMonth = year === 0 ? 1 : year * 12 + 1;
+                const endMonth = Math.min(startMonth + 12, monthlyData[key].length);
+                let yearSum = 0;
+                for (let month = startMonth; month < endMonth; month++) {
+                    yearSum += monthlyData[key][month] || 0;
                 }
-            ]
-        };
+                result.data[key].push(Math.abs(yearSum));
+            }
+        });
         
-        chart.update();
+        return result;
     }
 
-    function updateDebtBalanceChart(debtService) {
-        const chart = window.HomeYield.charts.debtBalanceChart;
-        if (!chart) return;
+    // ========== DEBT PAYMENT CHART ==========
+    
+    function initializeDebtPaymentChart() {
+        console.log("Initializing debt payment chart");
         
-        const months = debtService['Initial Mortgage'].EOP.length;
-        const monthLabels = Array.from({length: months}, (_, i) => 
-            i % 12 === 0 ? `Year ${Math.floor(i/12)}` : ''
-        );
+        const canvas = document.getElementById('annualDebtPaymentChart');
+        if (!canvas) {
+            console.error("Debt payment chart canvas not found");
+            return;
+        }
         
-        chart.data = {
-            labels: monthLabels,
-            datasets: [
-                {
-                    label: 'Initial Mortgage',
-                    data: debtService['Initial Mortgage'].EOP,
-                    borderColor: CONFIG.colors.primary,
-                    backgroundColor: CONFIG.colors.primary,
-                    fill: false
-                },
-                {
-                    label: 'Home Equity Loan',
-                    data: debtService['Home Equity Loan'].EOP,
-                    borderColor: CONFIG.colors.secondary,
-                    backgroundColor: CONFIG.colors.secondary,
-                    fill: false
-                },
-                {
-                    label: 'Refinanced Mortgage',
-                    data: debtService['Refinanced Mortgage'].EOP,
-                    borderColor: CONFIG.colors.accent1,
-                    backgroundColor: CONFIG.colors.accent1,
-                    fill: false
-                }
-            ]
+        ChartManager.destroyChart('annualDebtPaymentChart');
+        
+        // Color scheme for debt types
+        const debtColors = {
+            im: { 
+                principal: 'rgba(255, 99, 132, 0.8)',
+                interest: 'rgba(255, 99, 132, 0.5)',
+                extra: 'rgba(255, 99, 132, 0.3)'
+            },
+            rm: {
+                principal: 'rgba(153, 102, 255, 0.8)',
+                interest: 'rgba(153, 102, 255, 0.5)',
+                extra: 'rgba(153, 102, 255, 0.3)'
+            },
+            hel: {
+                principal: 'rgba(54, 162, 235, 0.8)',
+                interest: 'rgba(54, 162, 235, 0.5)',
+                extra: 'rgba(54, 162, 235, 0.3)'
+            }
         };
         
-        chart.update();
-    }
-
-    function aggregateToAnnual(cashFlows, years) {
-        const annual = {
-            revenues: Array(years).fill(0),
-            insurance: Array(years).fill(0),
-            propertyTax: Array(years).fill(0),
-            hoa: Array(years).fill(0),
-            maintenance: Array(years).fill(0),
-            managementFee: Array(years).fill(0)
-        };
-        
-        Object.keys(annual).forEach(key => {
-            for (let i = 0; i < cashFlows[key].length; i++) {
-                const year = Math.floor(i / 12);
-                if (year < years) {
-                    annual[key][year] += cashFlows[key][i];
+        const chart = new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    // Initial Mortgage
+                    {
+                        label: 'Initial Mortgage Principal',
+                        backgroundColor: debtColors.im.principal,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Initial Mortgage Interest',
+                        backgroundColor: debtColors.im.interest,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Initial Mortgage Extra Payments',
+                        backgroundColor: debtColors.im.extra,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    // Refinanced Mortgage
+                    {
+                        label: 'Refinanced Mortgage Principal',
+                        backgroundColor: debtColors.rm.principal,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Refinanced Mortgage Interest',
+                        backgroundColor: debtColors.rm.interest,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Refinanced Mortgage Extra Payments',
+                        backgroundColor: debtColors.rm.extra,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    // Home Equity Loan
+                    {
+                        label: 'Home Equity Loan Principal',
+                        backgroundColor: debtColors.hel.principal,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Home Equity Loan Interest',
+                        backgroundColor: debtColors.hel.interest,
+                        stack: 'Stack 0',
+                        data: []
+                    },
+                    {
+                        label: 'Home Equity Loan Extra Payments',
+                        backgroundColor: debtColors.hel.extra,
+                        stack: 'Stack 0',
+                        data: []
+                    }
+                ]
+            },
+            options: {
+                ...CONFIG.chartDefaults,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            usePointStyle: true,
+                            boxWidth: 10,
+                            filter: function(legendItem, data) {
+                                return !data.datasets[legendItem.datasetIndex].hidden;
+                            },
+                            font: {
+                                size: 11
+                            }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + 
+                                       formatCurrency(context.parsed.y);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true,
+                        title: {
+                            display: true,
+                            text: 'Year',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        grid: { display: false }
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return formatCurrency(value, true);
+                            }
+                        }
+                    }
                 }
             }
         });
         
-        return annual;
+        ChartManager.register('debtPayment', chart);
+        window.debtPaymentChart = chart;
+        
+        // Update function
+        window.updateDebtPaymentChart = function() {
+            if (!chart || !window.HomeYield.financialOutputs) return;
+            
+            try {
+                const outputs = window.HomeYield.financialOutputs;
+                const formDict = window.HomeYield.formDictionary || {};
+                
+                const investmentYears = formDict['investment-years'] || 20;
+                const isAdvanced = document.getElementById('toggle-switch')?.checked || false;
+                
+                // Determine active debt types
+                const helActive = isAdvanced && formDict['use-hel'] === 1;
+                const refinanceActive = isAdvanced && formDict['refinance-mortgage'] === 1;
+                const refinanceYear = refinanceActive ? parseInt(formDict['refinance-years'] || 5) : null;
+                
+                // Extra payments flags
+                const extraPayments = {
+                    im: isAdvanced && formDict['im-extra-payments'] === 1,
+                    hel: helActive && formDict['hel-extra-payments'] === 1,
+                    rm: refinanceActive && formDict['rm-extra-payments'] === 1
+                };
+                
+                // Prepare year labels
+                chart.data.labels = Array.from({ length: investmentYears }, (_, i) => `Year ${i + 1}`);
+                
+                // Initialize annual arrays
+                const annualData = {
+                    im: { principal: [], interest: [], extra: [] },
+                    rm: { principal: [], interest: [], extra: [] },
+                    hel: { principal: [], interest: [], extra: [] }
+                };
+                
+                // Process each year
+                for (let year = 0; year < investmentYears; year++) {
+                    const startMonth = year * 12 + 1;
+                    const endMonth = startMonth + 12;
+                    
+                    // Initial Mortgage (until refinance)
+                    if (!refinanceActive || year < refinanceYear) {
+                        annualData.im.principal[year] = sumArray(outputs['IM Principal'] || [], startMonth, endMonth);
+                        annualData.im.interest[year] = sumArray(outputs['IM Interest'] || [], startMonth, endMonth);
+                        if (extraPayments.im) {
+                            annualData.im.extra[year] = sumArray(outputs['IM Extra Payments'] || [], startMonth, endMonth);
+                        }
+                    }
+                    
+                    // Refinanced Mortgage (after refinance)
+                    if (refinanceActive && year >= refinanceYear) {
+                        annualData.rm.principal[year] = sumArray(outputs['RM Principal'] || [], startMonth, endMonth);
+                        annualData.rm.interest[year] = sumArray(outputs['RM Interest'] || [], startMonth, endMonth);
+                        if (extraPayments.rm) {
+                            annualData.rm.extra[year] = sumArray(outputs['RM Extra Payments'] || [], startMonth, endMonth);
+                        }
+                    }
+                    
+                    // Home Equity Loan
+                    if (helActive) {
+                        annualData.hel.principal[year] = sumArray(outputs['HEL Principal'] || [], startMonth, endMonth);
+                        annualData.hel.interest[year] = sumArray(outputs['HEL Interest'] || [], startMonth, endMonth);
+                        if (extraPayments.hel) {
+                            annualData.hel.extra[year] = sumArray(outputs['HEL Extra Payments'] || [], startMonth, endMonth);
+                        }
+                    }
+                }
+                
+                // Update chart datasets
+                const datasetMapping = [
+                    { idx: 0, data: annualData.im.principal },
+                    { idx: 1, data: annualData.im.interest },
+                    { idx: 2, data: annualData.im.extra, hidden: !extraPayments.im },
+                    { idx: 3, data: annualData.rm.principal, hidden: !refinanceActive },
+                    { idx: 4, data: annualData.rm.interest, hidden: !refinanceActive },
+                    { idx: 5, data: annualData.rm.extra, hidden: !extraPayments.rm },
+                    { idx: 6, data: annualData.hel.principal, hidden: !helActive },
+                    { idx: 7, data: annualData.hel.interest, hidden: !helActive },
+                    { idx: 8, data: annualData.hel.extra, hidden: !extraPayments.hel }
+                ];
+                
+                datasetMapping.forEach(({ idx, data, hidden }) => {
+                    chart.data.datasets[idx].data = data || [];
+                    chart.data.datasets[idx].hidden = hidden || (data?.every(v => v === 0) ?? true);
+                });
+                
+                chart.update();
+            } catch (error) {
+                console.error('Error updating debt payment chart:', error);
+            }
+        };
     }
 
-    function aggregateDebtToAnnual(debtService, years) {
-        const annual = {
-            imPrincipal: Array(years).fill(0),
-            imInterest: Array(years).fill(0),
-            helPrincipal: Array(years).fill(0),
-            helInterest: Array(years).fill(0),
-            rmPrincipal: Array(years).fill(0),
-            rmInterest: Array(years).fill(0)
-        };
+    function sumArray(arr, startIdx, endIdx) {
+        if (!Array.isArray(arr)) return 0;
+        let sum = 0;
+        for (let i = startIdx; i < endIdx && i < arr.length; i++) {
+            sum += arr[i] || 0;
+        }
+        return sum;
+    }
+
+    // ========== DEBT BALANCE CHART ==========
+    
+    function initializeDebtBalanceChart() {
+        console.log("Initializing debt balance chart");
         
-        for (let i = 0; i < debtService['Initial Mortgage']['Scheduled Payments'].length; i++) {
-            const year = Math.floor(i / 12);
-            if (year < years) {
-                annual.imPrincipal[year] += Math.abs(debtService['Initial Mortgage']['Scheduled Payments'][i] || 0);
-                annual.imInterest[year] += debtService['Initial Mortgage']['Interest Expense'][i] || 0;
-                annual.helPrincipal[year] += Math.abs(debtService['Home Equity Loan']['Scheduled Payments'][i] || 0);
-                annual.helInterest[year] += debtService['Home Equity Loan']['Interest Expense'][i] || 0;
-                annual.rmPrincipal[year] += Math.abs(debtService['Refinanced Mortgage']['Scheduled Payments'][i] || 0);
-                annual.rmInterest[year] += debtService['Refinanced Mortgage']['Interest Expense'][i] || 0;
-            }
+        const canvas = document.getElementById('debtBalanceChart');
+        if (!canvas) {
+            console.error("Cannot find debt balance chart canvas");
+            return;
         }
         
-        return annual;
+        ChartManager.destroyChart('debtBalanceChart');
+        
+        const colors = {
+            initialMortgage: 'rgba(255, 99, 132, 0.7)',
+            homeEquityLoan: 'rgba(54, 162, 235, 0.7)',
+            refinancedMortgage: 'rgba(153, 102, 255, 0.7)'
+        };
+        
+        const chart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: []
+            },
+            options: {
+                ...CONFIG.chartDefaults,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            font: { size: 12 }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: function(context) {
+                                const label = context[0].label;
+                                return label === "Close" ? "At Close" : "Year " + label;
+                            },
+                            label: function(context) {
+                                return context.dataset.label + ': ' + 
+                                       formatCurrency(context.parsed.y);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Year',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Remaining Debt Balance ($)',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        ticks: {
+                            callback: function(value) {
+                                return formatCurrency(value, true);
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        }
+                    }
+                },
+                elements: {
+                    line: {
+                        tension: 0,
+                        borderWidth: 2
+                    },
+                    point: {
+                        radius: 3,
+                        hoverRadius: 5,
+                        hitRadius: 10
+                    }
+                }
+            }
+        });
+        
+        ChartManager.register('debtBalance', chart);
+        window.debtBalanceChart = chart;
+        
+        // Update function
+        window.updateDebtBalanceChart = function(financialOutputs) {
+            if (!financialOutputs || !chart) return;
+            
+            try {
+                const imBalance = financialOutputs['IM Balance'] || [];
+                const helBalance = financialOutputs['HEL Balance'] || [];
+                const rmBalance = financialOutputs['RM Balance'] || [];
+                
+                const investmentYears = window.HomeYield.formDictionary['investment-years'] || 20;
+                
+                // Create labels
+                const labels = ['Close'];
+                for (let i = 1; i <= investmentYears; i++) {
+                    labels.push(i.toString());
+                }
+                
+                // Extract year-end balances
+                const yearEndBalances = {
+                    im: [],
+                    hel: [],
+                    rm: []
+                };
+                
+                for (let year = 0; year <= investmentYears; year++) {
+                    const monthIndex = year * 12;
+                    yearEndBalances.im[year] = imBalance[monthIndex] || 0;
+                    yearEndBalances.hel[year] = helBalance[monthIndex] || 0;
+                    yearEndBalances.rm[year] = rmBalance[monthIndex] || 0;
+                }
+                
+                // Create datasets
+                const datasets = [];
+                
+                if (!yearEndBalances.im.every(v => v === 0)) {
+                    datasets.push({
+                        label: 'Initial Mortgage',
+                        data: yearEndBalances.im,
+                        borderColor: colors.initialMortgage,
+                        backgroundColor: colors.initialMortgage,
+                        fill: true
+                    });
+                }
+                
+                if (!yearEndBalances.rm.every(v => v === 0)) {
+                    datasets.push({
+                        label: 'Refinanced Mortgage',
+                        data: yearEndBalances.rm,
+                        borderColor: colors.refinancedMortgage,
+                        backgroundColor: colors.refinancedMortgage,
+                        fill: true
+                    });
+                }
+                
+                if (!yearEndBalances.hel.every(v => v === 0)) {
+                    datasets.push({
+                        label: 'Home Equity Loan',
+                        data: yearEndBalances.hel,
+                        borderColor: colors.homeEquityLoan,
+                        backgroundColor: colors.homeEquityLoan,
+                        fill: true
+                    });
+                }
+                
+                // Update chart
+                chart.data.labels = labels;
+                chart.data.datasets = datasets;
+                chart.update();
+                
+            } catch (error) {
+                console.error("Error updating debt balance chart:", error);
+            }
+        };
     }
 
     // ========== TABLES ==========
@@ -1238,7 +2031,7 @@
             { label: 'Net Profit', value: formatCurrency(metrics.totalDistributions - metrics.totalContributions) }
         ];
         
-        let html = '<table class="summary-table"><tbody>';
+        let html = '<table class="homeyield-summary-table"><tbody>';
         rows.forEach(row => {
             html += `<tr>
                 <td>${row.label}</td>
@@ -1272,7 +2065,7 @@
         `;
         
         // Create table
-        html += '<div style="overflow-x: auto;"><table class="summary-table" style="font-size: 12px;"><thead><tr>';
+        html += '<div style="overflow-x: auto;"><table class="homeyield-summary-table" style="font-size: 12px;"><thead><tr>';
         html += '<th style="position: sticky; left: 0; background: white; z-index: 10;">Month</th>';
         
         const monthsToShow = months === 'all' ? cashFlows.revenues.length : Math.min(months, cashFlows.revenues.length);
@@ -1337,13 +2130,36 @@
 
     // ========== UTILITY FUNCTIONS ==========
     
-    function formatCurrency(value) {
-        return new Intl.NumberFormat('en-US', {
-            style: 'currency',
-            currency: 'USD',
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0
-        }).format(value);
+    function formatCurrency(value, shortForm = false) {
+        if (typeof value !== 'number' || isNaN(value)) return '$0';
+        
+        const absValue = Math.abs(value);
+        let formatted;
+        
+        if (shortForm) {
+            if (absValue >= 1e9) {
+                formatted = '$' + (value / 1e9).toFixed(1) + 'B';
+            } else if (absValue >= 1e6) {
+                formatted = '$' + (value / 1e6).toFixed(1) + 'M';
+            } else if (absValue >= 1e3) {
+                formatted = '$' + (value / 1e3).toFixed(0) + 'K';
+            } else {
+                formatted = '$' + absValue.toFixed(0);
+            }
+        } else {
+            formatted = new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(absValue);
+        }
+        
+        if (value < 0) {
+            formatted = '-' + formatted;
+        }
+        
+        return formatted;
     }
 
     // ========== INITIALIZATION ==========

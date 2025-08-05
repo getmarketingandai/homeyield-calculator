@@ -2177,5 +2177,119 @@
         updateCalculations: updateCalculations,
         getResults: () => window.HomeYield.financialOutputs
     };
+// ========== WEBFLOW-SPECIFIC INITIALIZATION ==========
+    
+    // Multiple initialization strategies for Webflow
+    function attemptInitialization() {
+        // Check if we're already initialized
+        if (window.HomeYield && window.HomeYield.isInitialized) {
+            console.log('HomeYield already initialized, skipping...');
+            return;
+        }
+        
+        // Check all dependencies
+        if (typeof Chart === 'undefined') {
+            console.log('Chart.js not yet loaded, retrying in 100ms...');
+            setTimeout(attemptInitialization, 100);
+            return;
+        }
+        
+        // Check for required DOM elements
+        const requiredElements = [
+            'toggle-switch',
+            'basic-form',
+            'advanced-form',
+            'sourcesUsesChart',
+            'barChart',
+            'annualCashFlowChart',
+            'annualDebtPaymentChart',
+            'debtBalanceChart'
+        ];
+        
+        const missingElements = requiredElements.filter(id => !document.getElementById(id));
+        
+        if (missingElements.length > 0) {
+            console.log('Missing required elements:', missingElements);
+            console.log('Retrying in 100ms...');
+            setTimeout(attemptInitialization, 100);
+            return;
+        }
+        
+        // All dependencies ready, initialize
+        console.log('All dependencies ready, initializing HomeYield Calculator...');
+        initializeCalculator();
+    }
+    
+    // Strategy 1: Webflow.push (if available)
+    if (window.Webflow && typeof window.Webflow.push === 'function') {
+        console.log('Using Webflow.push for initialization');
+        window.Webflow.push(function() {
+            setTimeout(attemptInitialization, 500);
+        });
+    }
+    
+    // Strategy 2: Window load event
+    if (document.readyState === 'complete') {
+        console.log('Document already loaded, attempting initialization...');
+        setTimeout(attemptInitialization, 100);
+    } else {
+        window.addEventListener('load', function() {
+            console.log('Window loaded, attempting initialization...');
+            setTimeout(attemptInitialization, 500);
+        });
+    }
+    
+    // Strategy 3: Webflow IX2 events (for Webflow interactions)
+    document.addEventListener('IX2_PREVIEW_LOAD', function() {
+        console.log('Webflow IX2 loaded, attempting initialization...');
+        setTimeout(attemptInitialization, 500);
+    });
+    
+    // Strategy 4: MutationObserver for dynamic content
+    if (typeof MutationObserver !== 'undefined') {
+        let initAttempts = 0;
+        const maxAttempts = 50; // 5 seconds max
+        
+        const observer = new MutationObserver(function(mutations) {
+            if (initAttempts >= maxAttempts) {
+                observer.disconnect();
+                return;
+            }
+            
+            // Check if our target elements have been added
+            const hasRequiredElements = document.getElementById('sourcesUsesChart') && 
+                                       document.getElementById('basic-form');
+            
+            if (hasRequiredElements && !window.HomeYield?.isInitialized) {
+                initAttempts++;
+                console.log(`MutationObserver: Attempting initialization (attempt ${initAttempts})...`);
+                attemptInitialization();
+            }
+        });
+        
+        // Start observing
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        
+        // Stop observing after 5 seconds
+        setTimeout(() => observer.disconnect(), 5000);
+    }
+    
+    // Strategy 5: Manual initialization function
+    window.initializeHomeYieldManual = function() {
+        console.log('Manual initialization triggered');
+        initializeCalculator();
+    };
+    
+    // Strategy 6: jQuery ready (if jQuery is available in Webflow)
+    if (typeof jQuery !== 'undefined') {
+        jQuery(document).ready(function() {
+            console.log('jQuery ready, attempting initialization...');
+            setTimeout(attemptInitialization, 500);
+        });
+    }
 
+// THIS IS THE LAST LINE - DON'T ADD ANYTHING AFTER THIS
 })();
